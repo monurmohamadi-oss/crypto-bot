@@ -1,0 +1,652 @@
+import ccxt
+import pandas as pd
+import ta
+import requests
+import json
+import os
+import time
+from datetime import datetime
+
+# ==========================================
+# تنظیمات
+# ==========================================
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+# اندیکاتورها
+DPO_LENGTH = 100
+STOCH_RSI_LENGTH = 14
+STOCH_RSI_MA = 14
+MA_FAST = 50
+MA_SLOW = 200
+ADX_LENGTH = 14
+DIVERGENCE_LOOKBACK = 100
+BB_LENGTH = 20
+BB_STD = 2
+
+# وزن‌ها
+WEIGHT_DPO = 3
+WEIGHT_STOCH = 1
+WEIGHT_DIVERGENCE = 3
+WEIGHT_MA = 1
+WEIGHT_ADX_25 = 1
+WEIGHT_ADX_35 = 2
+WEIGHT_VOLUME = 1
+WEIGHT_BB = 1
+WEIGHT_1H = 2
+
+# آستانه‌های جدید (نسخه ۵.۲)
+THRESHOLD_WEAK = 5
+THRESHOLD_MEDIUM = 7
+THRESHOLD_STRONG = 10
+THRESHOLD_VERY_STRONG = 13
+
+# فیلترها
+TOP_COINS_COUNT = 100
+MIN_VOLUME_USDT = 1000000
+DPO_THRESHOLD_PCT = 0.001
+
+# واگرایی
+DIV_MIN_DISTANCE = 5
+DIV_STOCH_DIFF = 3
+DIV_STOCH_OVERSOLD = 35
+DIV_STOCH_OVERBOUGHT = 65
+
+# ناحیه
+ZONE_RED_PCT = 10
+ZONE_BLUE_PCT = 25
+
+BLACKLIST = [
+    'USDC', 'USDT', 'USD1', 'DAI', 'FDUSD', 'TUSD', 'BUSD', 'USDD', 'USDP', 'GUSD', 'PYUSD',
+    'WBTC', 'WETH', 'STETH', 'WSTETH', 'WBETH', 'RETH', 'CBETH', 'BETH', 'WBNB', 'WAVAX', 'WMATIC',
+    'MSTRB', 'NVDAB', 'TSLAB', 'SPCXB', 'COINB', 'HOODB'
+]
+
+SIGNALS_FILE = "last_signals.json"
+DOM_FILE = "dom_data.json"
+
+# ==========================================
+# ابزارها
+# ==========================================
+def send_telegram(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+        r = requests.post(url, json=payload, timeout=15)
+        if not r.json().get('ok'):
+            print(f"خطا در تلگرام: {r.json()}")
+    except Exception as e:
+        print(f"خطا: {e}")
+
+def load_json(filename):
+    if os.path.exists(filename):
+        try:
+            with open(filename, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_json(filename, data):
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def calculate_dpo(close, period):
+    sma_period = period // 2 + 1
+    sma = close.rolling(window=sma_period).mean()
+    dpo = close - sma
+    return dpo.shift(period // 2 + 1)
+
+def calculate_indicators(df):
+    df['dpo'] = calculate_dpo(df['close'], DPO_LENGTH)
+    stoch_rsi = ta.momentum.StochRSIIndicator(close=df['close'], window=STOCH_RSI_LENGTH, smooth1=3, smooth2=3)
+    df['stoch_rsi'] = stoch_rsi.stochrsi() * 100
+    df['stoch_rsi_ma'] = df['stoch_rsi'].rolling(window=STOCH_RSI_MA).mean()
+    df['ma_fast'] = df['close'].rolling(window=MA_FAST).mean()
+    df['ma_slow'] = df['close'].rolling(window=MA_SLOW).mean()
+    adx_ind = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'], window=ADX_LENGTH)
+    df['adx'] = adx_ind.adx()
+    bb = ta.volatility.BollingerBands(close=df['close'], window=BB_LENGTH, window_dev=BB_STD)
+    df['bb_high'] = bb.bollinger_hband()
+    df['bb_low'] = bb.bollinger_lband()
+    df['vol_ma'] = df['volume'].rolling(window=20).mean()
+    return df
+
+def find_pivots(series, lookback=5):
+    pivots_low = []
+    pivots_high = []
+    for i in range(lookback, len(series) - lookback):
+        if series.iloc[i] == series.iloc[i-lookback:i+lookback+1].min():
+            pivots_low.append(i)
+        if series.iloc[i] == series.iloc[i-lookback:i+lookback+1].max():
+            pivots_high.append(i)
+    return pivots_low, pivots_high
+
+def check_bullish_divergence(df, lookback=DIVERGENCE_LOOKBACK):
+    recent = df.tail(lookback).reset_index(drop=True)
+    if len(recent) < 30:
+        return False
+    pivots_low, _ = find_pivots(recent['close'], lookback=5)
+    if len(pivots_low) < 2:
+        return False
+    p2 = pivots_low[-1]
+    p1 = pivots_low[-2]
+    if p2 - p1 < DIV_MIN_DISTANCE:
+        return False
+    if recent['close'].iloc[p2] >= recent['close'].iloc[p1]:
+        return False
+    if recent['stoch_rsi'].iloc[p2] - recent['stoch_rsi'].iloc[p1] < DIV_STOCH_DIFF:
+        return False
+    if recent['stoch_rsi'].iloc[p1] > DIV_STOCH_OVERSOLD:
+        return False
+    return True
+
+def check_bearish_divergence(df, lookback=DIVERGENCE_LOOKBACK):
+    recent = df.tail(lookback).reset_index(drop=True)
+    if len(recent) < 30:
+        return False
+    _, pivots_high = find_pivots(recent['close'], lookback=5)
+    if len(pivots_high) < 2:
+        return False
+    p2 = pivots_high[-1]
+    p1 = pivots_high[-2]
+    if p2 - p1 < DIV_MIN_DISTANCE:
+        return False
+    if recent['close'].iloc[p2] <= recent['close'].iloc[p1]:
+        return False
+    if recent['stoch_rsi'].iloc[p1] - recent['stoch_rsi'].iloc[p2] < DIV_STOCH_DIFF:
+        return False
+    if recent['stoch_rsi'].iloc[p1] < DIV_STOCH_OVERBOUGHT:
+        return False
+    return True
+
+def get_zone(price, df):
+    try:
+        high_100 = df['high'].tail(100).max()
+        low_100 = df['low'].tail(100).min()
+        if price > high_100:
+            return "🟢", ""
+        if price < low_100:
+            return "🟢", ""
+        dist_to_high = (high_100 - price) / high_100 * 100
+        dist_to_low = (price - low_100) / low_100 * 100
+        if dist_to_high < dist_to_low:
+            if dist_to_high <= ZONE_RED_PCT:
+                return "🔴", f"{int(100 - dist_to_high)}%"
+            elif dist_to_high <= ZONE_BLUE_PCT:
+                return "🔵", f"{int(100 - dist_to_high)}%"
+        else:
+            if dist_to_low <= ZONE_RED_PCT:
+                return "🔴", f"{int(dist_to_low)}%"
+            elif dist_to_low <= ZONE_BLUE_PCT:
+                return "🔵", f"{int(dist_to_low)}%"
+        return "⚪️", ""
+    except:
+        return "⚪️", ""
+
+# ==========================================
+# دامیننس - نسخه ۵.۲
+# ==========================================
+def get_market_data():
+    """
+    گرفتن داده‌های بازار - نسخه ۵.۲
+    - BTC MC hourly (۲ نقطه آخر)
+    - BTC Dom, ETH Dom, USDT Dom (لحظه‌ای)
+    """
+    result = {}
+    
+    # BTC MC hourly
+    try:
+        url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1&interval=hourly"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            data = r.json()['market_caps']
+            if len(data) >= 2:
+                result['btc_mc_now'] = data[-1][1]
+                result['btc_mc_prev'] = data[-2][1]
+    except Exception as e:
+        print(f"خطا BTC MC: {e}")
+    
+    time.sleep(1)
+    
+    # Global data
+    try:
+        url = "https://api.coingecko.com/api/v3/global"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            g = r.json()['data']
+            pct = g['market_cap_percentage']
+            result['btc_dom'] = pct['btc']
+            result['eth_dom'] = pct['eth']
+            result['usdt_dom'] = pct['usdt']
+            result['total_mc'] = g['total_market_cap']['usd']
+    except Exception as e:
+        print(f"خطا Global: {e}")
+    
+    return result
+
+def calc_dom_score(current_market, previous_market, btc_trend, symbol):
+    """
+    محاسبه امتیاز دامیننس - نسخه ۵.۲
+    منابع: BTC MC, BTC Dom, ETH Dom, USDT Dom
+    """
+    score = 0
+    details = []
+    
+    if not current_market or not previous_market:
+        return 0, []
+    
+    is_eth = symbol == 'ETH/USDT'
+    
+    # BTC MC Trend
+    btc_mc_up = False
+    if 'btc_mc_now' in current_market and 'btc_mc_prev' in current_market:
+        btc_mc_up = current_market['btc_mc_now'] > current_market['btc_mc_prev']
+    
+    # BTC Dom trend
+    btc_dom_up = False
+    if 'btc_dom' in current_market and 'btc_dom' in previous_market:
+        btc_dom_up = current_market['btc_dom'] > previous_market['btc_dom']
+    
+    # ETH Dom trend
+    eth_dom_up = False
+    if 'eth_dom' in current_market and 'eth_dom' in previous_market:
+        eth_dom_up = current_market['eth_dom'] > previous_market['eth_dom']
+    
+    # USDT Dom trend
+    usdt_dom_up = False
+    if 'usdt_dom' in current_market and 'usdt_dom' in previous_market:
+        usdt_dom_up = current_market['usdt_dom'] > previous_market['usdt_dom']
+    
+    # === BTC MC (برای همه) ===
+    if btc_mc_up:
+        score += 1
+        details.append("BTCMC+")
+    else:
+        score -= 1
+        details.append("BTCMC-")
+    
+    # === BTC Dom (برای همه) ===
+    if btc_trend == 'up' and not btc_dom_up:
+        score += 1
+        details.append("BTC✓")
+    elif btc_trend == 'down' and btc_dom_up:
+        score -= 1
+        details.append("BTC✗")
+    
+    # === ETH Dom (برای BTC و آلت) ===
+    if not is_eth:
+        if eth_dom_up:
+            score -= 1
+            details.append("ETHD-")
+        else:
+            score += 1
+            details.append("ETHD+")
+    
+    # === USDT Dom (برای همه) ===
+    if usdt_dom_up:
+        score -= 1
+        details.append("USDT-")
+    else:
+        score += 1
+        details.append("USDT+")
+    
+    return score, details
+
+# ==========================================
+# سیگنال‌ها
+# ==========================================
+def check_buy_signal(df):
+    score = 0
+    details = {}
+    logs = []
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    price = last['close']
+    
+    threshold = price * DPO_THRESHOLD_PCT
+    if prev['dpo'] < -threshold and last['dpo'] > threshold:
+        score += WEIGHT_DPO
+        details['DPO'] = WEIGHT_DPO
+        logs.append("   ✅ DPO")
+    else:
+        details['DPO'] = 0
+    
+    if last['stoch_rsi'] > last['stoch_rsi_ma']:
+        score += WEIGHT_STOCH
+        details['Stoch'] = WEIGHT_STOCH
+        logs.append("   ✅ Stoch")
+    else:
+        details['Stoch'] = 0
+    
+    has_div = check_bullish_divergence(df)
+    if has_div:
+        score += WEIGHT_DIVERGENCE
+        details['Div'] = WEIGHT_DIVERGENCE
+        logs.append("   ✅ Div+")
+    else:
+        details['Div'] = 0
+    
+    if last['ma_fast'] > last['ma_slow']:
+        score += WEIGHT_MA
+        details['MA'] = WEIGHT_MA
+        logs.append("   ✅ MA")
+    else:
+        details['MA'] = 0
+    
+    adx_score = 0
+    if last['adx'] > 35:
+        adx_score = WEIGHT_ADX_35
+    elif last['adx'] > 25:
+        adx_score = WEIGHT_ADX_25
+    if adx_score > 0:
+        score += adx_score
+        logs.append("   ✅ ADX")
+    details['ADX'] = adx_score
+    
+    vol_score = 0
+    if last['volume'] > 1.5 * last['vol_ma']:
+        vol_score = WEIGHT_VOLUME
+        score += vol_score
+        logs.append("   ✅ Vol")
+    details['Vol'] = vol_score
+    
+    bb_score = 0
+    bb_th = last['bb_low'] * 1.02
+    if last['close'] < bb_th:
+        bb_score = WEIGHT_BB
+        logs.append("   ✅ BB")
+    if has_div and last['close'] < bb_th:
+        bb_score = WEIGHT_BB
+    if bb_score > 0:
+        score += bb_score
+    details['BB'] = bb_score
+    
+    return score, details, logs
+
+def check_sell_signal(df):
+    score = 0
+    details = {}
+    logs = []
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
+    price = last['close']
+    
+    threshold = price * DPO_THRESHOLD_PCT
+    if prev['dpo'] > threshold and last['dpo'] < -threshold:
+        score += WEIGHT_DPO
+        details['DPO'] = WEIGHT_DPO
+        logs.append("   ✅ DPO")
+    else:
+        details['DPO'] = 0
+    
+    if last['stoch_rsi'] < last['stoch_rsi_ma']:
+        score += WEIGHT_STOCH
+        details['Stoch'] = WEIGHT_STOCH
+        logs.append("   ✅ Stoch")
+    else:
+        details['Stoch'] = 0
+    
+    has_div = check_bearish_divergence(df)
+    if has_div:
+        score += WEIGHT_DIVERGENCE
+        details['Div'] = WEIGHT_DIVERGENCE
+        logs.append("   ✅ Div-")
+    else:
+        details['Div'] = 0
+    
+    if last['ma_fast'] < last['ma_slow']:
+        score += WEIGHT_MA
+        details['MA'] = WEIGHT_MA
+        logs.append("   ✅ MA")
+    else:
+        details['MA'] = 0
+    
+    adx_score = 0
+    if last['adx'] > 35:
+        adx_score = WEIGHT_ADX_35
+    elif last['adx'] > 25:
+        adx_score = WEIGHT_ADX_25
+    if adx_score > 0:
+        score += adx_score
+        logs.append("   ✅ ADX")
+    details['ADX'] = adx_score
+    
+    vol_score = 0
+    if last['volume'] > 1.5 * last['vol_ma']:
+        vol_score = WEIGHT_VOLUME
+        score += vol_score
+        logs.append("   ✅ Vol")
+    details['Vol'] = vol_score
+    
+    bb_score = 0
+    bb_th = last['bb_high'] * 0.98
+    if last['close'] > bb_th:
+        bb_score = WEIGHT_BB
+        logs.append("   ✅ BB")
+    if has_div and last['close'] > bb_th:
+        bb_score = WEIGHT_BB
+    if bb_score > 0:
+        score += bb_score
+    details['BB'] = bb_score
+    
+    return score, details, logs
+
+def check_1h_confirmation(exchange, symbol, direction):
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
+        if len(ohlcv) < 50:
+            return False, "کندل کم"
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['stoch_rsi'] = ta.momentum.StochRSIIndicator(close=df['close'], window=STOCH_RSI_LENGTH).stochrsi() * 100
+        df['stoch_rsi_ma'] = df['stoch_rsi'].rolling(window=STOCH_RSI_MA).mean()
+        df['ma_fast'] = df['close'].rolling(window=MA_FAST).mean()
+        df['ma_slow'] = df['close'].rolling(window=MA_SLOW).mean()
+        last = df.iloc[-1]
+        if direction == 'buy':
+            ok = last['stoch_rsi'] > last['stoch_rsi_ma'] and last['ma_fast'] > last['ma_slow']
+            return ok, f"Stoch {last['stoch_rsi']:.0f}"
+        else:
+            ok = last['stoch_rsi'] < last['stoch_rsi_ma'] and last['ma_fast'] < last['ma_slow']
+            return ok, f"Stoch {last['stoch_rsi']:.0f}"
+    except:
+        return False, "خطا"
+
+def get_btc_trend(exchange):
+    try:
+        ohlcv = exchange.fetch_ohlcv('BTC/USDT', timeframe='4h', limit=300)
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['ma_fast'] = df['close'].rolling(window=50).mean()
+        df['ma_slow'] = df['close'].rolling(window=200).mean()
+        last = df.iloc[-1]
+        return 'up' if last['ma_fast'] > last['ma_slow'] else 'down'
+    except:
+        return None
+
+def get_top_symbols(exchange, count=100, min_volume=1000000):
+    try:
+        tickers = exchange.fetch_tickers()
+        usdt_pairs = {}
+        for sym, data in tickers.items():
+            if sym.endswith('/USDT'):
+                clean = sym.replace('/USDT', '')
+                if clean in BLACKLIST:
+                    continue
+                vol = data.get('quoteVolume', 0) or 0
+                if vol >= min_volume:
+                    usdt_pairs[sym] = vol
+        sorted_pairs = sorted(usdt_pairs.items(), key=lambda x: x[1], reverse=True)
+        return [sym for sym, _ in sorted_pairs[:count]]
+    except Exception as e:
+        print(f"خطا: {e}")
+        return []
+
+def format_details(details):
+    order = ['DPO', 'Stoch', 'Div', 'MA', 'ADX', 'Vol', 'BB']
+    parts = []
+    for key in order:
+        parts.append(f"{key}:{details.get(key, 0)}")
+    if details.get('1H', 0) > 0:
+        parts.append(f"1H:{details['1H']}")
+    if details.get('DOM', 0) != 0:
+        parts.append(f"DOM:{details['DOM']:+d}")
+    return " | ".join(parts)
+
+# ==========================================
+# تابع اصلی
+# ==========================================
+def main():
+    print(f"شروع بررسی - {datetime.now()}")
+    exchange = ccxt.lbank({'enableRateLimit': True})
+    
+    print("گرفتن دامیننس از CoinGecko...")
+    current_market = get_market_data()
+    previous_market = load_json(DOM_FILE)
+    
+    if current_market:
+        if 'btc_mc_now' in current_market and 'btc_mc_prev' in current_market:
+            print(f"BTC MC: ${current_market['btc_mc_prev']/1e12:.4f}T → ${current_market['btc_mc_now']/1e12:.4f}T")
+        if 'btc_dom' in current_market:
+            print(f"BTC Dom: {current_market['btc_dom']:.2f}%")
+    
+    btc_trend = get_btc_trend(exchange)
+    print(f"BTC Trend: {btc_trend}")
+    print()
+    
+    if current_market:
+        save_json(DOM_FILE, current_market)
+    
+    symbols = get_top_symbols(exchange, TOP_COINS_COUNT, MIN_VOLUME_USDT)
+    print(f"تعداد ارزها: {len(symbols)}\n")
+    
+    previous_signals = load_json(SIGNALS_FILE)
+    current_signals = {}
+    
+    buy_signals = []
+    sell_signals = []
+    
+    for i, symbol in enumerate(symbols, 1):
+        try:
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=300)
+            if len(ohlcv) < 210:
+                continue
+            
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df = calculate_indicators(df)
+            
+            buy_score, buy_details, buy_logs = check_buy_signal(df)
+            sell_score, sell_details, sell_logs = check_sell_signal(df)
+            current_price = df['close'].iloc[-1]
+            
+            if buy_score >= THRESHOLD_WEAK and sell_score >= THRESHOLD_WEAK:
+                if buy_score > sell_score:
+                    sell_score = 0
+                elif sell_score > buy_score:
+                    buy_score = 0
+                else:
+                    buy_score = 0
+                    sell_score = 0
+            
+            if buy_score >= THRESHOLD_WEAK or sell_score >= THRESHOLD_WEAK:
+                dom_score, dom_details = calc_dom_score(current_market, previous_market, btc_trend, symbol)
+                
+                if buy_score >= THRESHOLD_WEAK:
+                    buy_score += dom_score
+                    buy_details['DOM'] = dom_score
+                    if dom_details:
+                        buy_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({dom_score:+d})")
+                
+                if sell_score >= THRESHOLD_WEAK:
+                    sell_score += -dom_score
+                    sell_details['DOM'] = -dom_score
+                    if dom_details:
+                        sell_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({-dom_score:+d})")
+            
+            if buy_score >= 6:
+                buy_logs.append("   ⏳ 1H...")
+                confirmed, reason = check_1h_confirmation(exchange, symbol, 'buy')
+                if confirmed:
+                    buy_score += WEIGHT_1H
+                    buy_details['1H'] = WEIGHT_1H
+                    buy_logs.append(f"   ✅ 1H ({reason})")
+                else:
+                    buy_logs.append(f"   ❌ 1H ({reason})")
+            
+            if sell_score >= 6:
+                sell_logs.append("   ⏳ 1H...")
+                confirmed, reason = check_1h_confirmation(exchange, symbol, 'sell')
+                if confirmed:
+                    sell_score += WEIGHT_1H
+                    sell_details['1H'] = WEIGHT_1H
+                    sell_logs.append(f"   ✅ 1H ({reason})")
+                else:
+                    sell_logs.append(f"   ❌ 1H ({reason})")
+            
+            zone_color, zone_pct = get_zone(current_price, df)
+            clean_symbol = symbol.replace('/USDT', '')
+            
+            if buy_score >= THRESHOLD_WEAK:
+                current_signals[symbol] = {'type': 'buy', 'score': buy_score}
+            elif sell_score >= THRESHOLD_WEAK:
+                current_signals[symbol] = {'type': 'sell', 'score': sell_score}
+            
+            if buy_score >= THRESHOLD_WEAK:
+                if previous_signals.get(symbol, {}).get('type') != 'buy' or \
+                   previous_signals.get(symbol, {}).get('score') != buy_score:
+                    buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
+            
+            if sell_score >= THRESHOLD_WEAK:
+                if previous_signals.get(symbol, {}).get('type') != 'sell' or \
+                   previous_signals.get(symbol, {}).get('score') != sell_score:
+                    sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
+            
+            if i % 20 == 0:
+                print(f"بررسی {i}/{len(symbols)}")
+        except:
+            continue
+    
+    save_json(SIGNALS_FILE, current_signals)
+    
+    print("\n" + "="*60)
+    print("📋 لاگ:")
+    print("="*60)
+    
+    if buy_signals:
+        print("\n🟢 خرید:")
+        for sym, score, details, price, zc, zp, logs in buy_signals:
+            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}")
+            for log in logs:
+                print(log)
+    
+    if sell_signals:
+        print("\n🔴 فروش:")
+        for sym, score, details, price, zc, zp, logs in sell_signals:
+            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}")
+            for log in logs:
+                print(log)
+    
+    if buy_signals or sell_signals:
+        message = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
+        message += "─" * 25 + "\n"
+        
+        if buy_signals:
+            buy_signals.sort(key=lambda x: x[1], reverse=True)
+            for sym, score, details, price, zone_color, zone_pct, logs in buy_signals[:15]:
+                arrow = "🔥" if score >= THRESHOLD_VERY_STRONG else ("⬆️⬆️⬆️" if score >= THRESHOLD_STRONG else ("⬆️⬆️" if score >= THRESHOLD_MEDIUM else "⬆️"))
+                message += f"\n{arrow}\n\n#{sym} | {price} | {score}\n"
+                message += f"📊 {format_details(details)}\n"
+                message += f"{zone_color} ({zone_pct})\n" if zone_pct else f"{zone_color}\n"
+        
+        if sell_signals:
+            sell_signals.sort(key=lambda x: x[1], reverse=True)
+            for sym, score, details, price, zone_color, zone_pct, logs in sell_signals[:15]:
+                arrow = "🔥" if score >= THRESHOLD_VERY_STRONG else ("⬇️⬇️⬇️" if score >= THRESHOLD_STRONG else ("⬇️⬇️" if score >= THRESHOLD_MEDIUM else "⬇️"))
+                message += f"\n{arrow}\n\n#{sym} | {price} | {score}\n"
+                message += f"📊 {format_details(details)}\n"
+                message += f"{zone_color} ({zone_pct})\n" if zone_pct else f"{zone_color}\n"
+        
+        send_telegram(message)
+        print(f"\n✅ ارسال شد: {len(buy_signals)} خرید، {len(sell_signals)} فروش")
+    else:
+        print("\n❌ سیگنال جدیدی پیدا نشد.")
+
+main()
