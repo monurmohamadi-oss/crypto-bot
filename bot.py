@@ -36,7 +36,7 @@ WEIGHT_BB_SQZ = 1
 WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
-THRESHOLD_SHOW = 6
+THRESHOLD_SHOW = 7
 THRESHOLD_MEDIUM = 8
 THRESHOLD_STRONG = 12
 THRESHOLD_VERY_STRONG = 16
@@ -440,8 +440,7 @@ def check_buy_signal(df):
         logs.append("   ✅ Zone")
     details['Zone'] = zone_score
     
-    has_cross = dpo_cross or ma50_cross or ma200_cross
-    return score, details, logs, has_cross
+    return score, details, logs
 
 def check_sell_signal(df):
     score = 0
@@ -547,8 +546,7 @@ def check_sell_signal(df):
         logs.append("   ✅ Zone")
     details['Zone'] = zone_score
     
-    has_cross = dpo_cross or ma50_cross or ma200_cross
-    return score, details, logs, has_cross
+    return score, details, logs
 
 def check_1h_confirmation(exchange, symbol, direction):
     try:
@@ -649,8 +647,8 @@ def main():
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df = calculate_indicators(df)
             
-            buy_score, buy_details, buy_logs, buy_cross = check_buy_signal(df)
-            sell_score, sell_details, sell_logs, sell_cross = check_sell_signal(df)
+            buy_score, buy_details, buy_logs = check_buy_signal(df)
+            sell_score, sell_details, sell_logs = check_sell_signal(df)
             current_price = df['close'].iloc[-1]
             
             if buy_score >= 5 and sell_score >= 5:
