@@ -37,6 +37,7 @@ WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
 THRESHOLD_SHOW = 7
+THRESHOLD_CROSS = 3
 THRESHOLD_MEDIUM = 8
 THRESHOLD_STRONG = 12
 THRESHOLD_VERY_STRONG = 16
@@ -141,15 +142,12 @@ def check_ma_buy(df, ma_col):
     prev_ma = prev[ma_col]
     curr_price = last['close']
     curr_ma = last[ma_col]
-    
     crossed_above = prev_price < prev_ma and curr_price > curr_ma
-    
     body = abs(curr_price - last['open'])
     if body > 0:
         above_ratio = (curr_price - curr_ma) / body
     else:
         above_ratio = 0
-    
     if crossed_above and above_ratio > 0.5:
         return 1, True
     return 0, False
@@ -161,15 +159,12 @@ def check_ma_sell(df, ma_col):
     prev_ma = prev[ma_col]
     curr_price = last['close']
     curr_ma = last[ma_col]
-    
     crossed_below = prev_price > prev_ma and curr_price < curr_ma
-    
     body = abs(curr_price - last['open'])
     if body > 0:
         below_ratio = (curr_ma - curr_price) / body
     else:
         below_ratio = 0
-    
     if crossed_below and below_ratio > 0.5:
         return 1, True
     return 0, False
@@ -706,8 +701,8 @@ def main():
             zone_color, zone_pct, _ = get_zone(current_price, df)
             clean_symbol = symbol.replace('/USDT', '')
             
-            show_buy = (buy_score >= THRESHOLD_SHOW) or buy_cross
-            show_sell = (sell_score >= THRESHOLD_SHOW) or sell_cross
+            show_buy = (buy_score >= THRESHOLD_SHOW) or (buy_cross and buy_score >= THRESHOLD_CROSS)
+            show_sell = (sell_score >= THRESHOLD_SHOW) or (sell_cross and sell_score >= THRESHOLD_CROSS)
             
             if show_buy:
                 current_signals[symbol] = {'type': 'buy', 'score': buy_score}
