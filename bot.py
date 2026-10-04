@@ -36,8 +36,7 @@ WEIGHT_BB_SQZ = 1
 WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
-THRESHOLD_SHOW = 7
-THRESHOLD_CROSS = 3
+THRESHOLD_SHOW = 6
 THRESHOLD_MEDIUM = 8
 THRESHOLD_STRONG = 12
 THRESHOLD_VERY_STRONG = 16
@@ -701,8 +700,8 @@ def main():
             zone_color, zone_pct, _ = get_zone(current_price, df)
             clean_symbol = symbol.replace('/USDT', '')
             
-            show_buy = (buy_score >= THRESHOLD_SHOW) or (buy_cross and buy_score >= THRESHOLD_CROSS)
-            show_sell = (sell_score >= THRESHOLD_SHOW) or (sell_cross and sell_score >= THRESHOLD_CROSS)
+            show_buy = buy_score >= THRESHOLD_SHOW
+            show_sell = sell_score >= THRESHOLD_SHOW
             
             if show_buy:
                 current_signals[symbol] = {'type': 'buy', 'score': buy_score}
@@ -712,12 +711,12 @@ def main():
             if show_buy:
                 if previous_signals.get(symbol, {}).get('type') != 'buy' or \
                    previous_signals.get(symbol, {}).get('score') != buy_score:
-                    buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs, buy_cross))
+                    buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
             
             if show_sell:
                 if previous_signals.get(symbol, {}).get('type') != 'sell' or \
                    previous_signals.get(symbol, {}).get('score') != sell_score:
-                    sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs, sell_cross))
+                    sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
             
             if i % 20 == 0:
                 print(f"بررسی {i}/{len(symbols)}")
@@ -732,17 +731,15 @@ def main():
     
     if buy_signals:
         print("\n🟢 خرید:")
-        for sym, score, details, price, zc, zp, logs, cross in buy_signals:
-            cross_mark = " ⭐️ کراس تازه" if cross else ""
-            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}{cross_mark}")
+        for sym, score, details, price, zc, zp, logs in buy_signals:
+            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}")
             for log in logs:
                 print(log)
     
     if sell_signals:
         print("\n🔴 فروش:")
-        for sym, score, details, price, zc, zp, logs, cross in sell_signals:
-            cross_mark = " ⭐️ کراس تازه" if cross else ""
-            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}{cross_mark}")
+        for sym, score, details, price, zc, zp, logs in sell_signals:
+            print(f"\n#{sym} | {price} | امتیاز: {score} | {zc} {zp}")
             for log in logs:
                 print(log)
     
@@ -752,10 +749,8 @@ def main():
         
         if buy_signals:
             buy_signals.sort(key=lambda x: x[1], reverse=True)
-            for sym, score, details, price, zone_color, zone_pct, logs, cross in buy_signals[:15]:
-                if cross and score < THRESHOLD_SHOW:
-                    header = "⭐️ کراس تازه"
-                elif score >= THRESHOLD_VERY_STRONG:
+            for sym, score, details, price, zone_color, zone_pct, logs in buy_signals[:15]:
+                if score >= THRESHOLD_VERY_STRONG:
                     header = "🔥"
                 elif score >= THRESHOLD_STRONG:
                     header = "⬆️⬆️⬆️"
@@ -769,10 +764,8 @@ def main():
         
         if sell_signals:
             sell_signals.sort(key=lambda x: x[1], reverse=True)
-            for sym, score, details, price, zone_color, zone_pct, logs, cross in sell_signals[:15]:
-                if cross and score < THRESHOLD_SHOW:
-                    header = "⭐️ کراس تازه"
-                elif score >= THRESHOLD_VERY_STRONG:
+            for sym, score, details, price, zone_color, zone_pct, logs in sell_signals[:15]:
+                if score >= THRESHOLD_VERY_STRONG:
                     header = "🔥"
                 elif score >= THRESHOLD_STRONG:
                     header = "⬇️⬇️⬇️"
