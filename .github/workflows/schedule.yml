@@ -17,9 +17,9 @@ jobs:
           path: |
             dom_data.json
             last_signals.json
-          key: bot-cache-${{ github.run_id }}
+          key: bot-cache
           restore-keys: |
-            bot-cache-
+            bot-cache
       
       - name: Setup Python
         uses: actions/setup-python@v5
