@@ -36,7 +36,7 @@ WEIGHT_BB_SQZ = 1
 WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
-THRESHOLD_WEAK = 5
+THRESHOLD_SHOW = 7
 THRESHOLD_MEDIUM = 8
 THRESHOLD_STRONG = 12
 THRESHOLD_VERY_STRONG = 16
@@ -135,28 +135,36 @@ def check_dpo_sell(df):
     return 0, False
 
 def check_ma_buy(df, ma_col):
+    prev = df.iloc[-2]
     last = df.iloc[-1]
+    prev_price = prev['close']
+    prev_ma = prev[ma_col]
     curr_price = last['close']
     curr_ma = last[ma_col]
+    crossed_above = prev_price < prev_ma and curr_price > curr_ma
     body = abs(curr_price - last['open'])
     if body > 0:
         above_ratio = (curr_price - curr_ma) / body
     else:
         above_ratio = 0
-    if above_ratio > 0.5:
+    if crossed_above and above_ratio > 0.5:
         return 1
     return 0
 
 def check_ma_sell(df, ma_col):
+    prev = df.iloc[-2]
     last = df.iloc[-1]
+    prev_price = prev['close']
+    prev_ma = prev[ma_col]
     curr_price = last['close']
     curr_ma = last[ma_col]
+    crossed_below = prev_price > prev_ma and curr_price < curr_ma
     body = abs(curr_price - last['open'])
     if body > 0:
         below_ratio = (curr_ma - curr_price) / body
     else:
         below_ratio = 0
-    if below_ratio > 0.5:
+    if crossed_below and below_ratio > 0.5:
         return 1
     return 0
 
@@ -379,7 +387,7 @@ def check_buy_signal(df):
     if ma50_score > 0:
         score += ma50_score
         details['MA50'] = ma50_score
-        logs.append("   ✅ MA50")
+        logs.append("   ✅ MA50 (کراس تازه)")
     else:
         details['MA50'] = 0
     
@@ -387,7 +395,7 @@ def check_buy_signal(df):
     if ma200_score > 0:
         score += ma200_score
         details['MA200'] = ma200_score
-        logs.append("   ✅ MA200")
+        logs.append("   ✅ MA200 (کراس تازه)")
     else:
         details['MA200'] = 0
     
@@ -485,7 +493,7 @@ def check_sell_signal(df):
     if ma50_score > 0:
         score += ma50_score
         details['MA50'] = ma50_score
-        logs.append("   ✅ MA50")
+        logs.append("   ✅ MA50 (کراس تازه)")
     else:
         details['MA50'] = 0
     
@@ -493,7 +501,7 @@ def check_sell_signal(df):
     if ma200_score > 0:
         score += ma200_score
         details['MA200'] = ma200_score
-        logs.append("   ✅ MA200")
+        logs.append("   ✅ MA200 (کراس تازه)")
     else:
         details['MA200'] = 0
     
@@ -690,17 +698,20 @@ def main():
             zone_color, zone_pct, _ = get_zone(current_price, df)
             clean_symbol = symbol.replace('/USDT', '')
             
-            if buy_score >= THRESHOLD_WEAK:
+            show_buy = buy_score >= THRESHOLD_SHOW
+            show_sell = sell_score >= THRESHOLD_SHOW
+            
+            if show_buy:
                 current_signals[symbol] = {'type': 'buy', 'score': buy_score}
-            elif sell_score >= THRESHOLD_WEAK:
+            elif show_sell:
                 current_signals[symbol] = {'type': 'sell', 'score': sell_score}
             
-            if buy_score >= THRESHOLD_WEAK:
+            if show_buy:
                 if previous_signals.get(symbol, {}).get('type') != 'buy' or \
                    previous_signals.get(symbol, {}).get('score') != buy_score:
                     buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
             
-            if sell_score >= THRESHOLD_WEAK:
+            if show_sell:
                 if previous_signals.get(symbol, {}).get('type') != 'sell' or \
                    previous_signals.get(symbol, {}).get('score') != sell_score:
                     sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
@@ -730,12 +741,10 @@ def main():
             for log in logs:
                 print(log)
     
-    # ====== ارسال پیام تقسیم‌شده ======
     if buy_signals or sell_signals:
         buy_signals = buy_signals[:15]
         sell_signals = sell_signals[:15]
         
-        # پیام خرید
         if buy_signals:
             message_buy = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
             message_buy += "─" * 25 + "\n\n⬆️ *خرید*\n"
@@ -758,7 +767,6 @@ def main():
             send_telegram(message_buy)
             print("✅ پیام خرید ارسال شد")
         
-        # پیام فروش
         if sell_signals:
             message_sell = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
             message_sell += "─" * 25 + "\n\n⬇️ *فروش*\n"
