@@ -741,18 +741,13 @@ def main():
             for log in logs:
                 print(log)
     
-    # ===== ارسال پیام (تقسیم شده) =====
     if buy_signals or sell_signals:
-        # محدود کردن به ۱۰ تا
-        buy_signals = buy_signals[:10]
-        sell_signals = sell_signals[:10]
+        message = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
+        message += "─" * 25 + "\n"
         
-        # پیام خرید
         if buy_signals:
-            message_buy = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
-            message_buy += "─" * 25 + "\n\n⬆️ *خرید*\n"
             buy_signals.sort(key=lambda x: x[1], reverse=True)
-            for sym, score, details, price, zone_color, zone_pct, logs in buy_signals:
+            for sym, score, details, price, zone_color, zone_pct, logs in buy_signals[:15]:
                 if score >= THRESHOLD_VERY_STRONG:
                     header = "🔥"
                 elif score >= THRESHOLD_STRONG:
@@ -761,21 +756,13 @@ def main():
                     header = "⬆️⬆️"
                 else:
                     header = "⬆️"
-                message_buy += f"\n{header}\n\n#{sym} | {price} | {score}\n"
-                message_buy += f"📊 {format_details(details)}\n"
-                if zone_pct:
-                    message_buy += f"{zone_color} ({zone_pct})\n"
-                else:
-                    message_buy += f"{zone_color}\n"
-            send_telegram(message_buy)
-            print("✅ پیام خرید ارسال شد")
+                message += f"\n{header}\n\n#{sym} | {price} | {score}\n"
+                message += f"📊 {format_details(details)}\n"
+                message += f"{zone_color} ({zone_pct})\n" if zone_pct else f"{zone_color}\n"
         
-        # پیام فروش
         if sell_signals:
-            message_sell = f"🔔 سیگنال‌های جدید ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n"
-            message_sell += "─" * 25 + "\n\n⬇️ *فروش*\n"
             sell_signals.sort(key=lambda x: x[1], reverse=True)
-            for sym, score, details, price, zone_color, zone_pct, logs in sell_signals:
+            for sym, score, details, price, zone_color, zone_pct, logs in sell_signals[:15]:
                 if score >= THRESHOLD_VERY_STRONG:
                     header = "🔥"
                 elif score >= THRESHOLD_STRONG:
@@ -784,15 +771,11 @@ def main():
                     header = "⬇️⬇️"
                 else:
                     header = "⬇️"
-                message_sell += f"\n{header}\n\n#{sym} | {price} | {score}\n"
-                message_sell += f"📊 {format_details(details)}\n"
-                if zone_pct:
-                    message_sell += f"{zone_color} ({zone_pct})\n"
-                else:
-                    message_sell += f"{zone_color}\n"
-            send_telegram(message_sell)
-            print("✅ پیام فروش ارسال شد")
+                message += f"\n{header}\n\n#{sym} | {price} | {score}\n"
+                message += f"📊 {format_details(details)}\n"
+                message += f"{zone_color} ({zone_pct})\n" if zone_pct else f"{zone_color}\n"
         
+        send_telegram(message)
         print(f"\n✅ ارسال شد: {len(buy_signals)} خرید، {len(sell_signals)} فروش")
     else:
         print("\n❌ سیگنال جدیدی پیدا نشد.")
