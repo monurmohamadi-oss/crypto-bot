@@ -21,8 +21,7 @@ BB_LENGTH = 20
 BB_STD = 2
 BB_SQUEEZE_THRESHOLD = 0.05
 
-WEIGHT_DPO_CROSS = 3
-WEIGHT_DPO_DIR = 1
+WEIGHT_DPO = 3
 WEIGHT_RSI = 1
 WEIGHT_DIV_REG = 2
 WEIGHT_DIV_HID = 2
@@ -43,6 +42,7 @@ THRESHOLD_VERY_STRONG = 14
 
 TOP_COINS_COUNT = 100
 MIN_VOLUME_USDT = 1000000
+DPO_THRESHOLD_PCT = 0.001
 
 DIV_MIN_DISTANCE = 5
 DIV_RSI_DIFF = 3
@@ -105,36 +105,6 @@ def calculate_indicators(df):
     df['bb_width'] = (df['bb_high'] - df['bb_low']) / df['bb_mid']
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
-
-def check_dpo_buy(df):
-    recent_dpo = df['dpo'].tail(2).reset_index(drop=True)
-    crossed_up = False
-    if len(recent_dpo) >= 2:
-        if recent_dpo.iloc[0] < 0 and recent_dpo.iloc[-1] > 0:
-            crossed_up = True
-    
-    last_dpo = df['dpo'].iloc[-1]
-    if last_dpo > 0:
-        if crossed_up:
-            return WEIGHT_DPO_CROSS, True
-        else:
-            return WEIGHT_DPO_DIR, False
-    return 0, False
-
-def check_dpo_sell(df):
-    recent_dpo = df['dpo'].tail(2).reset_index(drop=True)
-    crossed_down = False
-    if len(recent_dpo) >= 2:
-        if recent_dpo.iloc[0] > 0 and recent_dpo.iloc[-1] < 0:
-            crossed_down = True
-    
-    last_dpo = df['dpo'].iloc[-1]
-    if last_dpo < 0:
-        if crossed_down:
-            return WEIGHT_DPO_CROSS, True
-        else:
-            return WEIGHT_DPO_DIR, False
-    return 0, False
 
 def find_pivots(series, lookback=5):
     pivots_low = []
@@ -326,16 +296,14 @@ def check_buy_signal(df):
     details = {}
     logs = []
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     price = last['close']
+    threshold = price * DPO_THRESHOLD_PCT
     
-    dpo_score, dpo_cross = check_dpo_buy(df)
-    if dpo_score > 0:
-        score += dpo_score
-        details['DPO'] = dpo_score
-        if dpo_cross:
-            logs.append("   ✅ DPO (کراس تازه)")
-        else:
-            logs.append("   ✅ DPO (فقط جهت)")
+    if last['dpo'] > threshold:
+        score += WEIGHT_DPO
+        details['DPO'] = WEIGHT_DPO
+        logs.append("   ✅ DPO")
     else:
         details['DPO'] = 0
     
@@ -440,16 +408,14 @@ def check_sell_signal(df):
     details = {}
     logs = []
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     price = last['close']
+    threshold = price * DPO_THRESHOLD_PCT
     
-    dpo_score, dpo_cross = check_dpo_sell(df)
-    if dpo_score > 0:
-        score += dpo_score
-        details['DPO'] = dpo_score
-        if dpo_cross:
-            logs.append("   ✅ DPO (کراس تازه)")
-        else:
-            logs.append("   ✅ DPO (فقط جهت)")
+    if last['dpo'] < -threshold:
+        score += WEIGHT_DPO
+        details['DPO'] = WEIGHT_DPO
+        logs.append("   ✅ DPO")
     else:
         details['DPO'] = 0
     
