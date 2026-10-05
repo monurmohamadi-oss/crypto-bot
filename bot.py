@@ -36,7 +36,8 @@ WEIGHT_BB_SQZ = 1
 WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
-THRESHOLD_SHOW = 5
+THRESHOLD_WEAK = 1
+THRESHOLD_SHOW = 1
 THRESHOLD_MEDIUM = 8
 THRESHOLD_STRONG = 12
 THRESHOLD_VERY_STRONG = 16
@@ -638,6 +639,8 @@ def main():
     buy_signals = []
     sell_signals = []
     
+    debug_count = 0
+    
     for i, symbol in enumerate(symbols, 1):
         try:
             ohlcv = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=300)
@@ -651,7 +654,7 @@ def main():
             sell_score, sell_details, sell_logs = check_sell_signal(df)
             current_price = df['close'].iloc[-1]
             
-            if buy_score >= THRESHOLD_WEAK and sell_score >= THRESHOLD_WEAK:
+            if buy_score >= 5 and sell_score >= 5:
                 if buy_score > sell_score:
                     sell_score = 0
                 elif sell_score > buy_score:
@@ -659,6 +662,14 @@ def main():
                 else:
                     buy_score = 0
                     sell_score = 0
+            
+            if buy_score >= 1 or sell_score >= 1:
+                debug_count += 1
+            
+            if buy_score >= 1:
+                print(f"🔍 {symbol} | BUY | امتیاز: {buy_score}")
+            if sell_score >= 1:
+                print(f"🔍 {symbol} | SELL | امتیاز: {sell_score}")
             
             if buy_score >= THRESHOLD_WEAK or sell_score >= THRESHOLD_WEAK:
                 dom_score, dom_details = calc_dom_score(current_market, previous_market, btc_trend, symbol)
@@ -698,20 +709,17 @@ def main():
             zone_color, zone_pct, _ = get_zone(current_price, df)
             clean_symbol = symbol.replace('/USDT', '')
             
-            show_buy = buy_score >= THRESHOLD_SHOW
-            show_sell = sell_score >= THRESHOLD_SHOW
-            
-            if show_buy:
+            if buy_score >= THRESHOLD_WEAK:
                 current_signals[symbol] = {'type': 'buy', 'score': buy_score}
-            elif show_sell:
+            elif sell_score >= THRESHOLD_WEAK:
                 current_signals[symbol] = {'type': 'sell', 'score': sell_score}
             
-            if show_buy:
+            if buy_score >= THRESHOLD_WEAK:
                 if previous_signals.get(symbol, {}).get('type') != 'buy' or \
                    previous_signals.get(symbol, {}).get('score') != buy_score:
                     buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
             
-            if show_sell:
+            if sell_score >= THRESHOLD_WEAK:
                 if previous_signals.get(symbol, {}).get('type') != 'sell' or \
                    previous_signals.get(symbol, {}).get('score') != sell_score:
                     sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
@@ -722,6 +730,8 @@ def main():
             continue
     
     save_json(SIGNALS_FILE, current_signals)
+    
+    print(f"\n📊 تعداد سیگنال‌های ۱+ : {debug_count}")
     
     print("\n" + "="*60)
     print("📋 لاگ:")
