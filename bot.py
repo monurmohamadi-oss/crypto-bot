@@ -633,9 +633,6 @@ def main():
     symbols = get_top_symbols(exchange, TOP_COINS_COUNT, MIN_VOLUME_USDT)
     print(f"تعداد ارزها: {len(symbols)}\n")
     
-    previous_signals = load_json(SIGNALS_FILE)
-    current_signals = {}
-    
     buy_signals = []
     sell_signals = []
     
@@ -654,15 +651,6 @@ def main():
             sell_score, sell_details, sell_logs = check_sell_signal(df)
             current_price = df['close'].iloc[-1]
             
-            if buy_score >= 5 and sell_score >= 5:
-                if buy_score > sell_score:
-                    sell_score = 0
-                elif sell_score > buy_score:
-                    buy_score = 0
-                else:
-                    buy_score = 0
-                    sell_score = 0
-            
             if buy_score >= 1 or sell_score >= 1:
                 debug_count += 1
             
@@ -671,20 +659,19 @@ def main():
             if sell_score >= 1:
                 print(f"🔍 {symbol} | SELL | امتیاز: {sell_score}")
             
-            if buy_score >= THRESHOLD_WEAK or sell_score >= THRESHOLD_WEAK:
+            if buy_score >= THRESHOLD_WEAK:
                 dom_score, dom_details = calc_dom_score(current_market, previous_market, btc_trend, symbol)
-                
-                if buy_score >= THRESHOLD_WEAK:
-                    buy_score += dom_score
-                    buy_details['DOM'] = dom_score
-                    if dom_details:
-                        buy_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({dom_score:+d})")
-                
-                if sell_score >= THRESHOLD_WEAK:
-                    sell_score += -dom_score
-                    sell_details['DOM'] = -dom_score
-                    if dom_details:
-                        sell_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({-dom_score:+d})")
+                buy_score += dom_score
+                buy_details['DOM'] = dom_score
+                if dom_details:
+                    buy_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({dom_score:+d})")
+            
+            if sell_score >= THRESHOLD_WEAK:
+                dom_score, dom_details = calc_dom_score(current_market, previous_market, btc_trend, symbol)
+                sell_score += -dom_score
+                sell_details['DOM'] = -dom_score
+                if dom_details:
+                    sell_logs.append(f"   🌐 DOM: {' '.join(dom_details)} ({-dom_score:+d})")
             
             if buy_score >= 7:
                 buy_logs.append("   ⏳ 1H...")
@@ -710,26 +697,15 @@ def main():
             clean_symbol = symbol.replace('/USDT', '')
             
             if buy_score >= THRESHOLD_WEAK:
-                current_signals[symbol] = {'type': 'buy', 'score': buy_score}
-            elif sell_score >= THRESHOLD_WEAK:
-                current_signals[symbol] = {'type': 'sell', 'score': sell_score}
-            
-            if buy_score >= THRESHOLD_WEAK:
-                if previous_signals.get(symbol, {}).get('type') != 'buy' or \
-                   previous_signals.get(symbol, {}).get('score') != buy_score:
-                    buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
+                buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
             
             if sell_score >= THRESHOLD_WEAK:
-                if previous_signals.get(symbol, {}).get('type') != 'sell' or \
-                   previous_signals.get(symbol, {}).get('score') != sell_score:
-                    sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
+                sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
             
             if i % 20 == 0:
                 print(f"بررسی {i}/{len(symbols)}")
         except:
             continue
-    
-    save_json(SIGNALS_FILE, current_signals)
     
     print(f"\n📊 تعداد سیگنال‌های ۱+ : {debug_count}")
     
