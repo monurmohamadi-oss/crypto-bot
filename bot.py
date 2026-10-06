@@ -39,10 +39,10 @@ WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
 THRESHOLD_WEAK = 5
-THRESHOLD_SHOW = 8
-THRESHOLD_MEDIUM = 10
-THRESHOLD_STRONG = 13
-THRESHOLD_VERY_STRONG = 17
+THRESHOLD_SHOW = 6
+THRESHOLD_MEDIUM = 8
+THRESHOLD_STRONG = 11
+THRESHOLD_VERY_STRONG = 15
 
 TOP_COINS_COUNT = 100
 MIN_VOLUME_USDT = 1000000
@@ -683,7 +683,20 @@ def main():
         if 'btc_mc_now' in current_market and 'btc_mc_prev' in current_market:
             print(f"BTC MC: ${current_market['btc_mc_prev']/1e12:.4f}T → ${current_market['btc_mc_now']/1e12:.4f}T")
         if 'btc_dom' in current_market:
-            print(f"BTC Dom: {current_market['btc_dom']:.2f}%")
+            if previous_market and 'btc_dom' in previous_market:
+                print(f"BTC Dom: {previous_market['btc_dom']:.2f}% → {current_market['btc_dom']:.2f}%")
+            else:
+                print(f"BTC Dom: {current_market['btc_dom']:.2f}% (اولین بار)")
+        if 'eth_dom' in current_market:
+            if previous_market and 'eth_dom' in previous_market:
+                print(f"ETH Dom: {previous_market['eth_dom']:.2f}% → {current_market['eth_dom']:.2f}%")
+            else:
+                print(f"ETH Dom: {current_market['eth_dom']:.2f}% (اولین بار)")
+        if 'usdt_dom' in current_market:
+            if previous_market and 'usdt_dom' in previous_market:
+                print(f"USDT Dom: {previous_market['usdt_dom']:.2f}% → {current_market['usdt_dom']:.2f}%")
+            else:
+                print(f"USDT Dom: {current_market['usdt_dom']:.2f}% (اولین بار)")
     
     btc_trend = get_btc_trend(exchange)
     print(f"BTC Trend: {btc_trend}")
