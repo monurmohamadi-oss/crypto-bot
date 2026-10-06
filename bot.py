@@ -21,6 +21,9 @@ BB_LENGTH = 20
 BB_STD = 2
 BB_SQUEEZE_THRESHOLD = 0.05
 
+MA_CROSS_WINDOW = 5
+ZONE_BREAK_WINDOW = 10
+
 WEIGHT_DPO_CROSS = 3
 WEIGHT_DPO_DIR = 1
 WEIGHT_RSI = 1
@@ -32,15 +35,14 @@ WEIGHT_MA200 = 1
 WEIGHT_ADX = 1
 WEIGHT_VOLUME = 1
 WEIGHT_BB = 1
-WEIGHT_BB_SQZ = 1
 WEIGHT_ZONE = 2
 WEIGHT_1H = 2
 
 THRESHOLD_WEAK = 5
-THRESHOLD_SHOW = 5
-THRESHOLD_MEDIUM = 8
-THRESHOLD_STRONG = 12
-THRESHOLD_VERY_STRONG = 16
+THRESHOLD_SHOW = 8
+THRESHOLD_MEDIUM = 10
+THRESHOLD_STRONG = 13
+THRESHOLD_VERY_STRONG = 17
 
 TOP_COINS_COUNT = 100
 MIN_VOLUME_USDT = 1000000
@@ -136,37 +138,33 @@ def check_dpo_sell(df):
     return 0, False
 
 def check_ma_buy(df, ma_col):
-    prev = df.iloc[-2]
-    last = df.iloc[-1]
-    prev_price = prev['close']
-    prev_ma = prev[ma_col]
-    curr_price = last['close']
-    curr_ma = last[ma_col]
-    crossed_above = prev_price < prev_ma and curr_price > curr_ma
-    body = abs(curr_price - last['open'])
-    if body > 0:
-        above_ratio = (curr_price - curr_ma) / body
-    else:
-        above_ratio = 0
-    if crossed_above and above_ratio > 0.5:
-        return 1
+    recent = df.tail(MA_CROSS_WINDOW + 1).reset_index(drop=True)
+    if len(recent) < 2:
+        return 0
+    for i in range(len(recent) - 1):
+        prev = recent.iloc[i]
+        curr = recent.iloc[i + 1]
+        if prev['close'] < prev[ma_col] and curr['close'] > curr[ma_col]:
+            body = abs(curr['close'] - curr['open'])
+            if body > 0:
+                ratio = (curr['close'] - curr[ma_col]) / body
+                if ratio > 0.5:
+                    return 1
     return 0
 
 def check_ma_sell(df, ma_col):
-    prev = df.iloc[-2]
-    last = df.iloc[-1]
-    prev_price = prev['close']
-    prev_ma = prev[ma_col]
-    curr_price = last['close']
-    curr_ma = last[ma_col]
-    crossed_below = prev_price > prev_ma and curr_price < curr_ma
-    body = abs(curr_price - last['open'])
-    if body > 0:
-        below_ratio = (curr_ma - curr_price) / body
-    else:
-        below_ratio = 0
-    if crossed_below and below_ratio > 0.5:
-        return 1
+    recent = df.tail(MA_CROSS_WINDOW + 1).reset_index(drop=True)
+    if len(recent) < 2:
+        return 0
+    for i in range(len(recent) - 1):
+        prev = recent.iloc[i]
+        curr = recent.iloc[i + 1]
+        if prev['close'] > prev[ma_col] and curr['close'] < curr[ma_col]:
+            body = abs(curr['close'] - curr['open'])
+            if body > 0:
+                ratio = (curr[ma_col] - curr['close']) / body
+                if ratio > 0.5:
+                    return 1
     return 0
 
 def find_pivots(series, lookback=5):
@@ -240,6 +238,28 @@ def check_rsi_trend_break(df, lookback=DIVERGENCE_LOOKBACK):
                 if current_rsi < recent['rsi'].iloc[p2]:
                     return "bearish"
     return "none"
+
+def check_zone_break_buy(df):
+    if len(df) < ZONE_BREAK_WINDOW + 1:
+        return 0
+    recent = df.tail(ZONE_BREAK_WINDOW + 1).reset_index(drop=True)
+    high_100 = df['high'].tail(100).max()
+    for i in range(len(recent) - 1):
+        curr = recent.iloc[i + 1]
+        if curr['close'] > high_100:
+            return 1
+    return 0
+
+def check_zone_break_sell(df):
+    if len(df) < ZONE_BREAK_WINDOW + 1:
+        return 0
+    recent = df.tail(ZONE_BREAK_WINDOW + 1).reset_index(drop=True)
+    low_100 = df['low'].tail(100).min()
+    for i in range(len(recent) - 1):
+        curr = recent.iloc[i + 1]
+        if curr['close'] < low_100:
+            return 1
+    return 0
 
 def get_zone(price, df):
     try:
@@ -341,6 +361,7 @@ def check_buy_signal(df):
     score = 0
     details = {}
     logs = []
+    hard_count = 0
     last = df.iloc[-1]
     price = last['close']
     
@@ -349,7 +370,8 @@ def check_buy_signal(df):
         score += dpo_score
         details['DPO'] = dpo_score
         if dpo_cross:
-            logs.append("   ✅ DPO (کراس تازه)")
+            hard_count += 1
+            logs.append("   ✅ DPO (کراس تازه) [سخت]")
         else:
             logs.append("   ✅ DPO (فقط جهت)")
     else:
@@ -366,13 +388,15 @@ def check_buy_signal(df):
     if div_reg == "bullish":
         score += WEIGHT_DIV_REG
         details['DivReg'] = WEIGHT_DIV_REG
-        logs.append("   ✅ DivReg+")
+        hard_count += 1
+        logs.append("   ✅ DivReg+ [سخت]")
     else:
         details['DivReg'] = 0
     if div_hid == "bullish":
         score += WEIGHT_DIV_HID
         details['DivHid'] = WEIGHT_DIV_HID
-        logs.append("   ✅ DivHid+")
+        hard_count += 1
+        logs.append("   ✅ DivHid+ [سخت]")
     else:
         details['DivHid'] = 0
     
@@ -380,7 +404,8 @@ def check_buy_signal(df):
     if trend_rsi == "bullish":
         score += WEIGHT_TREND_RSI
         details['TrendRSI'] = WEIGHT_TREND_RSI
-        logs.append("   ✅ TrendRSI+")
+        hard_count += 1
+        logs.append("   ✅ TrendRSI+ [سخت]")
     else:
         details['TrendRSI'] = 0
     
@@ -388,7 +413,8 @@ def check_buy_signal(df):
     if ma50_score > 0:
         score += ma50_score
         details['MA50'] = ma50_score
-        logs.append("   ✅ MA50 (کراس تازه)")
+        hard_count += 1
+        logs.append("   ✅ MA50 (کراس تازه) [سخت]")
     else:
         details['MA50'] = 0
     
@@ -396,7 +422,8 @@ def check_buy_signal(df):
     if ma200_score > 0:
         score += ma200_score
         details['MA200'] = ma200_score
-        logs.append("   ✅ MA200 (کراس تازه)")
+        hard_count += 1
+        logs.append("   ✅ MA200 (کراس تازه) [سخت]")
     else:
         details['MA200'] = 0
     
@@ -416,37 +443,37 @@ def check_buy_signal(df):
     details['Vol'] = vol_score
     
     bb_score = 0
+    bb_condition = False
     bb_th = last['bb_low'] * 1.02
     if last['close'] < bb_th:
-        bb_score = WEIGHT_BB
-        logs.append("   ✅ BB")
+        bb_condition = True
     if (div_reg == "bullish" or div_hid == "bullish") and last['close'] < bb_th:
-        bb_score = WEIGHT_BB
-    if bb_score > 0:
-        score += bb_score
-    details['BB'] = bb_score
-    
-    bb_sqz = 0
+        bb_condition = True
     if last['bb_width'] < BB_SQUEEZE_THRESHOLD:
-        bb_sqz = WEIGHT_BB_SQZ
-        score += bb_sqz
-        logs.append("   ✅ BBSqz")
-    details['BBSqz'] = bb_sqz
+        bb_condition = True
+    if bb_condition:
+        bb_score = WEIGHT_BB
+        score += bb_score
+        logs.append("   ✅ BB/BBSqz")
+    details['BB'] = bb_score
     
     zone_score = 0
     z_color, z_pct, z_break = get_zone(price, df)
-    if z_break:
+    zone_break = check_zone_break_buy(df)
+    if z_break or zone_break:
         zone_score = WEIGHT_ZONE
         score += zone_score
-        logs.append("   ✅ Zone")
+        hard_count += 1
+        logs.append("   ✅ Zone [سخت]")
     details['Zone'] = zone_score
     
-    return score, details, logs
+    return score, details, logs, hard_count
 
 def check_sell_signal(df):
     score = 0
     details = {}
     logs = []
+    hard_count = 0
     last = df.iloc[-1]
     price = last['close']
     
@@ -455,7 +482,8 @@ def check_sell_signal(df):
         score += dpo_score
         details['DPO'] = dpo_score
         if dpo_cross:
-            logs.append("   ✅ DPO (کراس تازه)")
+            hard_count += 1
+            logs.append("   ✅ DPO (کراس تازه) [سخت]")
         else:
             logs.append("   ✅ DPO (فقط جهت)")
     else:
@@ -472,13 +500,15 @@ def check_sell_signal(df):
     if div_reg == "bearish":
         score += WEIGHT_DIV_REG
         details['DivReg'] = WEIGHT_DIV_REG
-        logs.append("   ✅ DivReg-")
+        hard_count += 1
+        logs.append("   ✅ DivReg- [سخت]")
     else:
         details['DivReg'] = 0
     if div_hid == "bearish":
         score += WEIGHT_DIV_HID
         details['DivHid'] = WEIGHT_DIV_HID
-        logs.append("   ✅ DivHid-")
+        hard_count += 1
+        logs.append("   ✅ DivHid- [سخت]")
     else:
         details['DivHid'] = 0
     
@@ -486,7 +516,8 @@ def check_sell_signal(df):
     if trend_rsi == "bearish":
         score += WEIGHT_TREND_RSI
         details['TrendRSI'] = WEIGHT_TREND_RSI
-        logs.append("   ✅ TrendRSI-")
+        hard_count += 1
+        logs.append("   ✅ TrendRSI- [سخت]")
     else:
         details['TrendRSI'] = 0
     
@@ -494,7 +525,8 @@ def check_sell_signal(df):
     if ma50_score > 0:
         score += ma50_score
         details['MA50'] = ma50_score
-        logs.append("   ✅ MA50 (کراس تازه)")
+        hard_count += 1
+        logs.append("   ✅ MA50 (کراس تازه) [سخت]")
     else:
         details['MA50'] = 0
     
@@ -502,7 +534,8 @@ def check_sell_signal(df):
     if ma200_score > 0:
         score += ma200_score
         details['MA200'] = ma200_score
-        logs.append("   ✅ MA200 (کراس تازه)")
+        hard_count += 1
+        logs.append("   ✅ MA200 (کراس تازه) [سخت]")
     else:
         details['MA200'] = 0
     
@@ -522,32 +555,31 @@ def check_sell_signal(df):
     details['Vol'] = vol_score
     
     bb_score = 0
+    bb_condition = False
     bb_th = last['bb_high'] * 0.98
     if last['close'] > bb_th:
-        bb_score = WEIGHT_BB
-        logs.append("   ✅ BB")
+        bb_condition = True
     if (div_reg == "bearish" or div_hid == "bearish") and last['close'] > bb_th:
-        bb_score = WEIGHT_BB
-    if bb_score > 0:
-        score += bb_score
-    details['BB'] = bb_score
-    
-    bb_sqz = 0
+        bb_condition = True
     if last['bb_width'] < BB_SQUEEZE_THRESHOLD:
-        bb_sqz = WEIGHT_BB_SQZ
-        score += bb_sqz
-        logs.append("   ✅ BBSqz")
-    details['BBSqz'] = bb_sqz
+        bb_condition = True
+    if bb_condition:
+        bb_score = WEIGHT_BB
+        score += bb_score
+        logs.append("   ✅ BB/BBSqz")
+    details['BB'] = bb_score
     
     zone_score = 0
     z_color, z_pct, z_break = get_zone(price, df)
-    if z_break:
+    zone_break = check_zone_break_sell(df)
+    if z_break or zone_break:
         zone_score = WEIGHT_ZONE
         score += zone_score
-        logs.append("   ✅ Zone")
+        hard_count += 1
+        logs.append("   ✅ Zone [سخت]")
     details['Zone'] = zone_score
     
-    return score, details, logs
+    return score, details, logs, hard_count
 
 def check_1h_confirmation(exchange, symbol, direction):
     try:
@@ -599,7 +631,7 @@ def get_top_symbols(exchange, count=100, min_volume=1000000):
         return []
 
 def format_details(details):
-    order = ['DPO', 'RSI', 'DivReg', 'DivHid', 'TrendRSI', 'MA50', 'MA200', 'ADX', 'Vol', 'BB', 'BBSqz', 'Zone']
+    order = ['DPO', 'RSI', 'DivReg', 'DivHid', 'TrendRSI', 'MA50', 'MA200', 'ADX', 'Vol', 'BB', 'Zone']
     parts = []
     for key in order:
         parts.append(f"{key}:{details.get(key, 0)}")
@@ -608,6 +640,36 @@ def format_details(details):
     if details.get('DOM', 0) != 0:
         parts.append(f"DOM:{details['DOM']:+d}")
     return " | ".join(parts)
+
+def get_legend(details):
+    legend = []
+    if details.get('DPO', 0) == 3:
+        legend.append("DPO:3=کراس تازه")
+    elif details.get('DPO', 0) == 1:
+        legend.append("DPO:1=فقط جهت")
+    if details.get('RSI', 0) > 0:
+        legend.append("RSI=بالای MA")
+    if details.get('DivReg', 0) > 0:
+        legend.append("DivReg=واگرایی معمولی")
+    if details.get('DivHid', 0) > 0:
+        legend.append("DivHid=واگرایی مخفی")
+    if details.get('TrendRSI', 0) > 0:
+        legend.append("TrendRSI=شکست خط روند")
+    if details.get('MA50', 0) > 0:
+        legend.append("MA50=کراس 50")
+    if details.get('MA200', 0) > 0:
+        legend.append("MA200=کراس 200")
+    if details.get('ADX', 0) > 0:
+        legend.append("ADX=روند قوی")
+    if details.get('Vol', 0) > 0:
+        legend.append("Vol=حجم بالا")
+    if details.get('BB', 0) > 0:
+        legend.append("BB=باند/فشردگی")
+    if details.get('Zone', 0) > 0:
+        legend.append("Zone=شکست سطح")
+    if details.get('DOM', 0) != 0:
+        legend.append(f"DOM={details.get('DOM'):+d}")
+    return " | ".join(legend) if legend else ""
 
 def main():
     print(f"شروع بررسی - {datetime.now()}")
@@ -637,6 +699,7 @@ def main():
     sell_signals = []
     
     debug_count = 0
+    core_filtered = 0
     
     for i, symbol in enumerate(symbols, 1):
         try:
@@ -647,17 +710,17 @@ def main():
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df = calculate_indicators(df)
             
-            buy_score, buy_details, buy_logs = check_buy_signal(df)
-            sell_score, sell_details, sell_logs = check_sell_signal(df)
+            buy_score, buy_details, buy_logs, buy_hard = check_buy_signal(df)
+            sell_score, sell_details, sell_logs, sell_hard = check_sell_signal(df)
             current_price = df['close'].iloc[-1]
             
             if buy_score >= 1 or sell_score >= 1:
                 debug_count += 1
             
             if buy_score >= 1:
-                print(f"🔍 {symbol} | BUY | امتیاز: {buy_score}")
+                print(f"🔍 {symbol} | BUY | امتیاز: {buy_score} | سخت: {buy_hard}")
             if sell_score >= 1:
-                print(f"🔍 {symbol} | SELL | امتیاز: {sell_score}")
+                print(f"🔍 {symbol} | SELL | امتیاز: {sell_score} | سخت: {sell_hard}")
             
             if buy_score >= THRESHOLD_WEAK:
                 dom_score, dom_details = calc_dom_score(current_market, previous_market, btc_trend, symbol)
@@ -696,11 +759,15 @@ def main():
             zone_color, zone_pct, _ = get_zone(current_price, df)
             clean_symbol = symbol.replace('/USDT', '')
             
-            if buy_score >= THRESHOLD_WEAK:
+            if buy_score >= THRESHOLD_WEAK and buy_hard >= 2:
                 buy_signals.append((clean_symbol, buy_score, buy_details, current_price, zone_color, zone_pct, buy_logs))
+            elif buy_score >= THRESHOLD_WEAK and buy_hard < 2:
+                core_filtered += 1
             
-            if sell_score >= THRESHOLD_WEAK:
+            if sell_score >= THRESHOLD_WEAK and sell_hard >= 2:
                 sell_signals.append((clean_symbol, sell_score, sell_details, current_price, zone_color, zone_pct, sell_logs))
+            elif sell_score >= THRESHOLD_WEAK and sell_hard < 2:
+                core_filtered += 1
             
             if i % 20 == 0:
                 print(f"بررسی {i}/{len(symbols)}")
@@ -708,6 +775,7 @@ def main():
             continue
     
     print(f"\n📊 تعداد سیگنال‌های ۱+ : {debug_count}")
+    print(f"📊 فیلتر شده (کمتر از ۲ سخت) : {core_filtered}")
     
     print("\n" + "="*60)
     print("📋 لاگ:")
@@ -746,6 +814,9 @@ def main():
                     header = "⬆️"
                 message_buy += f"\n{header}\n\n#{sym} | {price} | {score}\n"
                 message_buy += f"📊 {format_details(details)}\n"
+                legend = get_legend(details)
+                if legend:
+                    message_buy += f"🔑 {legend}\n"
                 if zone_pct:
                     message_buy += f"{zone_color} ({zone_pct})\n"
                 else:
@@ -768,6 +839,9 @@ def main():
                     header = "⬇️"
                 message_sell += f"\n{header}\n\n#{sym} | {price} | {score}\n"
                 message_sell += f"📊 {format_details(details)}\n"
+                legend = get_legend(details)
+                if legend:
+                    message_sell += f"🔑 {legend}\n"
                 if zone_pct:
                     message_sell += f"{zone_color} ({zone_pct})\n"
                 else:
